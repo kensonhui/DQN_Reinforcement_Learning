@@ -13,9 +13,10 @@ import torch.nn.functional as F
 ## Variable to represent if user stops training
 stop_signal = False
 
-def keyboard_interrupt_handler():
+def keyboard_interrupt_handler(_, __):
    global stop_signal
    stop_signal = True
+   print("Received keyboard interrup signal, waiting for episode to finish")
 
 signal.signal(signal.SIGINT, keyboard_interrupt_handler)
 
@@ -46,6 +47,7 @@ class DQN(nn.Module):
    def __init__(self, n_observations, n_actions):
       super(DQN, self).__init__()
       self.layer1 = nn.Linear(n_observations, 128)
+      self.layer2 = nn.Linear(128, 128)
       self.layer2 = nn.Linear(128, 128)
       self.layer3 = nn.Linear(128, n_actions)
    
@@ -141,46 +143,48 @@ def optimize_model():
    nn.utils.clip_grad_value_(policy_net.parameters(), 100)
    optimizer.step()
 
-try:
-   for i_episode in range(600):
-      state, info = env.reset()
-      state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
-      total_reward= 0
+for i_episode in range(600):
+   state, info = env.reset()
+   state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+   total_reward= 0
 
-      for t in count():
-         if stop_signal:
-            raise InterruptedError("Interupt by User")
-         action = select_action(state)
-         observation, reward, terminated, truncated, info = env.step(action.item())
-         reward = torch.tensor([reward], device=device, dtype=torch.float32)
-         total_reward += reward
-         done = terminated or truncated
+   if stop_signal:
+      break
 
-         if terminated:
-            next_state = None
-         else:
-            next_state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(0)
+   for t in count():
+      action = select_action(state)
+      observation, reward, terminated, truncated, info = env.step(action.item())
+      reward = torch.tensor([reward], device=device, dtype=torch.float32)
+      total_reward += reward
+      done = terminated or truncated
 
-         memory.push(state, action, next_state, reward)
-         state = next_state
-         
-         optimize_model()
+      if terminated:
+         next_state = None
+      else:
+         next_state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(0)
 
-         # Soft update target network
-         # θ′ ← τ θ + (1 −τ )θ′
-         target_net_state_dict = target_net.state_dict()
-         policy_net_state_dict = policy_net.state_dict()
-         for key in policy_net_state_dict:
-            target_net_state_dict[key] = policy_net_state_dict[key] * TAU + \
-            target_net_state_dict[key]*(1-TAU)
-            target_net.load_state_dict(target_net_state_dict)
+      memory.push(state, action, next_state, reward)
+      state = next_state
+      
+      optimize_model()
 
-         if done:
-            episode_rewards.append(total_reward)
-            break
-finally:
-   print("Complete!")
-   plot_durations(show_result=True)
-   plt.show()
+      # Soft update target network
+      # θ′ ← τ θ + (1 −τ )θ′
+      target_net_state_dict = target_net.state_dict()
+      policy_net_state_dict = policy_net.state_dict()
+      for key in policy_net_state_dict:
+         target_net_state_dict[key] = policy_net_state_dict[key] * TAU + \
+         target_net_state_dict[key]*(1-TAU)
+         target_net.load_state_dict(target_net_state_dict)
 
-   env.close()
+      if done:
+         episode_rewards.append(total_reward / t)
+         break
+   print(f"Episode {i_episode} : avg reward: f{total_reward / t}, steps: f{t}")
+
+print("Complete!")
+torch.save(policy_net.state_dict(), 'weights/model_weights.pth')
+plot_durations(show_result=True)
+plt.show()
+plt.savefig("logs/training.png")
+env.close()
